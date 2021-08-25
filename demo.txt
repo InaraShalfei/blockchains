@@ -1,4 +1,0 @@
-Hello from Python!
-Hello from Python!Hello from Python!Hello from Python!Hello from Python!123Hello from Python!
-123Hello from Python!
-13
