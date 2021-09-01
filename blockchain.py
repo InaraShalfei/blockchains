@@ -15,9 +15,9 @@ MINING_REWARD = 10
 class Blockchain:
     def __init__(self, public_key, node_id):
         genesis_block = Block(0, '', [], 100, 0)
-        self.__chain = [genesis_block]
+        self.chain = [genesis_block]
         self.__open_transactions = []
-        self.hosting_node = public_key
+        self.public_key = public_key
         self.__peer_nodes = set()
         self.node_id = node_id
         self.load_data()
@@ -88,10 +88,13 @@ class Blockchain:
             proof += 1
         return proof
 
-    def get_balance(self):
-        if self.hosting_node is None:
-            return None
-        participant = self.hosting_node
+    def get_balance(self, sender=None):
+        if sender is None:
+            if self.public_key is None:
+                return None
+            participant = self.public_key
+        else:
+            participant = sender
         tx_sender = [[tx.amount for tx in block.transactions
                       if tx.sender == participant] for block in self.__chain]
         open_tx_sender = [tx.amount for tx in self.__open_transactions if
@@ -111,37 +114,38 @@ class Blockchain:
             return None
         return self.__chain[-1]
 
-    def add_transaction(self, recipient, sender, signature, amount=1.0):
-        if self.hosting_node is None:
-            return False
+    def add_transaction(self, recipient, sender, signature, amount=1.0, is_receiving=False):
+        # if self.public_key is None:
+        #     return False
         transaction = Transaction(sender, recipient, signature, amount)
         if Verification.verify_transaction(transaction, self.get_balance):
             self.__open_transactions.append(transaction)
             self.save_data()
-            for node in self.__peer_nodes:
-                url = 'http://{}/broadcast-transaction'.format(node)
-                try:
-                    response = requests.post(url, json={
-                        'sender': sender,
-                        'recipient': recipient,
-                        'amount': amount,
-                        'signature': signature
-                    })
-                    if response.status_code == 400 or response.status_code == 500:
-                        print('Transaction was declined, needs resolving.')
-                        return False
-                except requests.exceptions.ConnectionError:
-                    continue
+            if not is_receiving:
+                for node in self.__peer_nodes:
+                    url = 'http://{}/broadcast-transaction'.format(node)
+                    try:
+                        response = requests.post(url, json={
+                            'sender': sender,
+                            'recipient': recipient,
+                            'amount': amount,
+                            'signature': signature
+                        })
+                        if response.status_code == 400 or response.status_code == 500:
+                            print('Transaction was declined, needs resolving.')
+                            return False
+                    except requests.exceptions.ConnectionError:
+                        continue
             return True
         return False
 
     def mine_block(self):
-        if self.hosting_node is None:
+        if self.public_key is None:
             return None
         last_block = self.__chain[-1]
         hashed_block = hash_block(last_block)
         proof = self.proof_of_work()
-        reward_transaction = Transaction('MINING', self.hosting_node, '', MINING_REWARD)
+        reward_transaction = Transaction('MINING', self.public_key, '', MINING_REWARD)
         copied_transactions = self.__open_transactions[:]
         for tx in copied_transactions:
             if not Wallet.verify_transaction(tx):
@@ -151,7 +155,35 @@ class Blockchain:
         self.__chain.append(block)
         self.__open_transactions = []
         self.save_data()
+        for node in self.__peer_nodes:
+            url = 'http://{}/broadcast-block'.format(node)
+            converted_block = block.__dict__.copy()
+            converted_block['transactions'] = [
+                tx.__dict__ for tx in converted_block['transactions']
+            ]
+            try:
+                response = requests.post(url, json={'block': converted_block})
+                if response.status_code == 400 or response.status_code == 500:
+                    print('Block was declined, needs resolving.')
+            except requests.exceptions.ConnectionError:
+                continue
         return block
+
+    def add_block(self, block):
+        transactions = [Transaction(
+            tx['sender'], tx['recipient'], tx['signature'], tx['amount'])
+            for tx in block['transactions']]
+        proof_is_valid = Verification.valid_proof(
+            transactions[:-1], block['previous_hash'], block['proof'])
+        hashes_match = hash_block(self.chain[-1]) == block['previous_hash']
+        if not proof_is_valid or not hashes_match:
+            return False
+        converted_block = Block(
+            block['index'], block['previous_hash'], transactions,
+            block['proof'], block['timestamp'])
+        self.__chain.append(converted_block)
+        self.save_data()
+        return True
 
     def add_peer_node(self, node):
         self.__peer_nodes.add(node)
