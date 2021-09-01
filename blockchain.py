@@ -20,6 +20,7 @@ class Blockchain:
         self.public_key = public_key
         self.__peer_nodes = set()
         self.node_id = node_id
+        self.resolve_conflicts = False
         self.load_data()
 
     @property
@@ -165,6 +166,8 @@ class Blockchain:
                 response = requests.post(url, json={'block': converted_block})
                 if response.status_code == 400 or response.status_code == 500:
                     print('Block was declined, needs resolving.')
+                if response.status_code == 409:
+                    self.resolve_conflicts = True
             except requests.exceptions.ConnectionError:
                 continue
         return block
@@ -182,6 +185,17 @@ class Blockchain:
             block['index'], block['previous_hash'], transactions,
             block['proof'], block['timestamp'])
         self.__chain.append(converted_block)
+        stored_transactions = self.__open_transactions[:]
+        for tx in block['transactions']:
+            for open_tx in stored_transactions:
+                if (open_tx.sender == tx['sender']
+                        and open_tx.recipient == tx['recipient']
+                        and open_tx.amount == tx['amount']
+                        and open_tx.signature == tx['signature']):
+                    try:
+                        self.__open_transactions.remove(open_tx)
+                    except ValueError:
+                        print('Item was already removed!')
         self.save_data()
         return True
 
